@@ -27,6 +27,10 @@ export INSTANCE_TYPE="t3.micro"
 # CloudFront 回源用 HTTP:80（ALB 入站由托管前缀列表锁死，无 0.0.0.0/0）
 export ALB_LISTEN_PORT="80"
 
+# CloudFront 自定义源头验证（应用层防绕过）
+export CF_ORIGIN_VERIFY_HEADER="X-Origin-Verify"
+export CF_ORIGIN_VERIFY_SECRET="${CF_ORIGIN_VERIFY_SECRET:-$(openssl rand -hex 32)}"
+
 # 状态文件（记录已创建资源 ID，供 destroy 使用）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export STATE_FILE="${SCRIPT_DIR}/.state"

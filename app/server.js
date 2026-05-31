@@ -12,6 +12,19 @@ const Database = require("better-sqlite3");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const CF_ORIGIN_VERIFY_HEADER = (process.env.CF_ORIGIN_VERIFY_HEADER || "X-Origin-Verify").toLowerCase();
+const CF_ORIGIN_VERIFY_SECRET = process.env.CF_ORIGIN_VERIFY_SECRET || "";
+
+// ---- 应用层 CloudFront 源验证中间件 ----
+// 验证请求经由 CloudFront 转发（自定义源头校验），防止绕过 CloudFront 直接访问 ALB
+app.use((req, res, next) => {
+  // 放行 ALB 健康检查路径（ALB 直连实例，不经过 CloudFront）
+  if (req.path === "/health") return next();
+  if (!CF_ORIGIN_VERIFY_SECRET) return next(); // 未配置 secret 时不阻断（兼容本地开发）
+  if (req.headers[CF_ORIGIN_VERIFY_HEADER] === CF_ORIGIN_VERIFY_SECRET) return next();
+  return res.status(403).json({ error: "forbidden" });
+});
+
 
 // ---- 内存数据库与种子数据 ----
 const db = new Database(":memory:");

@@ -15,6 +15,9 @@ CACHE_POLICY_ID="4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
 # 转发所有 viewer 请求头/查询串/cookie 的 origin request policy: AllViewer
 ORIGIN_REQ_POLICY_ID="216adef6-5c7f-47e4-b989-5492eafa07d3" # Managed-AllViewer
 
+# 持久化 origin verify secret 以便 destroy / 重建时可查
+state_set CF_ORIGIN_VERIFY_SECRET "$CF_ORIGIN_VERIFY_SECRET"
+
 CONFIG=$(cat <<EOF
 {
   "CallerReference": "${CALLER_REF}",
@@ -23,6 +26,9 @@ CONFIG=$(cat <<EOF
   "Origins": {"Quantity": 1, "Items": [{
     "Id": "alb-origin",
     "DomainName": "${ALB_DNS}",
+    "CustomHeaders": {"Quantity": 1, "Items": [
+      {"HeaderName": "${CF_ORIGIN_VERIFY_HEADER}", "HeaderValue": "${CF_ORIGIN_VERIFY_SECRET}"}
+    ]},
     "CustomOriginConfig": {
       "HTTPPort": ${ALB_LISTEN_PORT},
       "HTTPSPort": 443,
