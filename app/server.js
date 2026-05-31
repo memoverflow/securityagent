@@ -113,13 +113,13 @@ app.get("/login", (_req, res) => {
   </body></html>`);
 });
 
-// ---- 漏洞 #1：SQL 注入（字符串拼接） ----
-// 例: name = ' OR '1'='1  可绕过认证
+
+// ---- 登录认证 ----
 app.post("/login", (req, res) => {
   const { name = "", password = "" } = req.body;
-  const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
+  const sql = "SELECT id, name FROM users WHERE name = ? AND password = ?";
   try {
-    const row = db.prepare(sql).get();
+    const row = db.prepare(sql).get(name, password);
     if (row) {
       // 登录成功：建立会话（真实登录态）
       req.session.user = { id: row.id, name: row.name };
@@ -131,11 +131,9 @@ app.post("/login", (req, res) => {
     }
     return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
-    // 故意把 SQL 错误暴露给客户端 —— 便于注入探测（信息泄露）
-    return res.status(500).json({ ok: false, error: e.message, sql });
+    return res.status(500).json({ ok: false, error: "internal server error" });
   }
 });
-
 // 登出
 app.post("/logout", (req, res) => {
   req.session.destroy(() => res.redirect("/"));
