@@ -13,6 +13,17 @@ const Database = require("better-sqlite3");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ---- HTML 转义工具函数 ----
+function escapeHtml(str) {
+  if (typeof str !== "string") return "";
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ---- 内存数据库与种子数据 ----
 const db = new Database(":memory:");
 db.exec(`
@@ -117,9 +128,9 @@ app.get("/login", (_req, res) => {
 // 例: name = ' OR '1'='1  可绕过认证
 app.post("/login", (req, res) => {
   const { name = "", password = "" } = req.body;
-  const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
+  const sql = "SELECT id, name FROM users WHERE name = ? AND password = ?";
   try {
-    const row = db.prepare(sql).get();
+    const row = db.prepare(sql).get(name, password);
     if (row) {
       // 登录成功：建立会话（真实登录态）
       req.session.user = { id: row.id, name: row.name };
@@ -153,7 +164,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
     form{display:inline}</style></head>
   <body>
     <div class="bar">
-      <h2>欢迎回来，${u.name}</h2>
+      <h2>欢迎回来，${escapeHtml(u.name)}</h2>
       <form method="post" action="/logout"><button>退出</button></form>
     </div>
     <p>这是你的个人工作台。</p>
