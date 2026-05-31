@@ -27,7 +27,7 @@ mkdir -p /opt/app
 echo "${APP_B64}" | base64 -d > /opt/app/server.js
 cd /opt/app
 npm init -y
-npm install express better-sqlite3
+npm install express better-sqlite3 express-session bcryptjs express-rate-limit
 cat > /etc/systemd/system/pentest-app.service <<'UNIT'
 [Unit]
 Description=Pentest Target App

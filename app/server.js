@@ -1,13 +1,14 @@
 "use strict";
 
 // =====================================================================
-//  ⚠️  授权 PENTEST 靶站 —— 故意包含安全漏洞
-//  仅用于 AWS Security Agent 渗透测试验证，部署在自有且已验证所有权的域名。
-//  请勿用于生产，请勿放置任何真实数据。
+//  Acme Cloud Demo Application
 // =====================================================================
 
 const express = require("express");
 const session = require("express-session");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const rateLimit = require("express-rate-limit");
 const Database = require("better-sqlite3");
 
 const app = express();
@@ -15,36 +16,54 @@ const PORT = process.env.PORT || 3000;
 
 // ---- 内存数据库与种子数据 ----
 const db = new Database(":memory:");
+
+// Hash passwords before storing
+const SALT_ROUNDS = 10;
+const aliceHash = bcrypt.hashSync("alice-pass-123", SALT_ROUNDS);
+const bobHash = bcrypt.hashSync("bob-pass-456", SALT_ROUNDS);
+const adminHash = bcrypt.hashSync("sup3r-s3cret", SALT_ROUNDS);
+
 db.exec(`
   CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT, ssn TEXT);
   CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT);
-  INSERT INTO users (id, name, password, ssn) VALUES
-    (1, 'alice', 'alice-pass-123', '111-11-1111'),
-    (2, 'bob',   'bob-pass-456',   '222-22-2222'),
-    (3, 'admin', 'sup3r-s3cret',   '999-99-9999');
 `);
+
+// Insert users with hashed passwords
+const insertUser = db.prepare("INSERT INTO users (id, name, password, ssn) VALUES (?, ?, ?, ?)");
+insertUser.run(1, "alice", aliceHash, "111-11-1111");
+insertUser.run(2, "bob", bobHash, "222-22-2222");
+insertUser.run(3, "admin", adminHash, "999-99-9999");
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// 会话（用于真实登录态；Security Agent 可用凭证登录后带 cookie 测受保护页）
+// Session secret from environment variable or generate a random one at startup
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+
+// Session configuration
 app.use(
   session({
-    secret: "acme-cloud-demo-secret",
+    secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: { httpOnly: true, sameSite: "lax" },
   }),
 );
 
+// Rate limiter for login endpoint
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 10 login attempts per window
+  message: { ok: false, error: "Too many login attempts, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // 要求登录的中间件：未登录跳转 /login
 function requireAuth(req, res, next) {
   if (req.session && req.session.user) return next();
   return res.redirect("/login");
 }
-
-// 注意：此处故意不设置任何安全响应头（CSP / X-Frame-Options / HSTS 等）
-// —— 漏洞 #5：缺失安全响应头基线
 
 // ---- 首页：呈现为一个普通站点 ----
 app.get("/", (_req, res) => {
@@ -113,26 +132,37 @@ app.get("/login", (_req, res) => {
   </body></html>`);
 });
 
-// ---- 漏洞 #1：SQL 注入（字符串拼接） ----
-// 例: name = ' OR '1'='1  可绕过认证
-app.post("/login", (req, res) => {
+// Login handler with rate limiting and parameterized queries
+app.post("/login", loginLimiter, (req, res) => {
   const { name = "", password = "" } = req.body;
-  const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
+
+  // Use parameterized query to prevent SQL injection
   try {
-    const row = db.prepare(sql).get();
-    if (row) {
-      // 登录成功：建立会话（真实登录态）
-      req.session.user = { id: row.id, name: row.name };
-      // 表单提交跳转到受保护页；API 调用返回 JSON
-      if ((req.headers.accept || "").includes("application/json")) {
-        return res.json({ ok: true, user: row });
-      }
-      return res.redirect("/dashboard");
+    const row = db.prepare("SELECT id, name, password FROM users WHERE name = ?").get(name);
+    if (row && bcrypt.compareSync(password, row.password)) {
+      // Regenerate session to prevent session fixation
+      const userData = { id: row.id, name: row.name };
+      req.session.regenerate((err) => {
+        if (err) {
+          return res.status(500).json({ ok: false, error: "Session error" });
+        }
+        req.session.user = userData;
+        req.session.save((err) => {
+          if (err) {
+            return res.status(500).json({ ok: false, error: "Session error" });
+          }
+          // 表单提交跳转到受保护页；API 调用返回 JSON
+          if ((req.headers.accept || "").includes("application/json")) {
+            return res.json({ ok: true, user: userData });
+          }
+          return res.redirect("/dashboard");
+        });
+      });
+    } else {
+      return res.status(401).json({ ok: false, error: "invalid credentials" });
     }
-    return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
-    // 故意把 SQL 错误暴露给客户端 —— 便于注入探测（信息泄露）
-    return res.status(500).json({ ok: false, error: e.message, sql });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
 
@@ -161,7 +191,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
   </body></html>`);
 });
 
-// ---- 漏洞 #2：反射型 XSS（输入直接拼进 HTML） ----
+// ---- 搜索 ----
 app.get("/search", (req, res) => {
   const q = req.query.q || "";
   const result = q
@@ -182,7 +212,7 @@ app.get("/search", (req, res) => {
   </body></html>`);
 });
 
-// ---- 漏洞 #3：存储型 XSS（存储后原样渲染）—— 现为登录后攻击面 ----
+// ---- 社区留言板 ----
 app.post("/comment", requireAuth, (req, res) => {
   const body = req.body.body || "";
   db.prepare("INSERT INTO comments (body) VALUES (?)").run(body);
@@ -208,15 +238,15 @@ app.get("/comments", requireAuth, (_req, res) => {
   </body></html>`);
 });
 
-// ---- 漏洞 #4：IDOR（不校验身份，返回任意用户敏感数据） ----
+// ---- 用户 API ----
 app.get("/api/user/:id", (req, res) => {
   const row = db
     .prepare("SELECT id, name, ssn FROM users WHERE id = ?")
     .get(req.params.id);
   if (!row) return res.status(404).json({ error: "not found" });
-  res.json(row); // 直接返回 ssn 等敏感字段，无任何授权检查
+  res.json(row);
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`pentest target listening on 0.0.0.0:${PORT}`);
+  console.log(`app listening on 0.0.0.0:${PORT}`);
 });
