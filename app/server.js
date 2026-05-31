@@ -131,8 +131,7 @@ app.post("/login", (req, res) => {
     }
     return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
-    // 故意把 SQL 错误暴露给客户端 —— 便于注入探测（信息泄露）
-    return res.status(500).json({ ok: false, error: e.message, sql });
+    return res.status(500).json({ ok: false, error: "internal server error" });
   }
 });
 
