@@ -7,6 +7,7 @@
 // =====================================================================
 
 const express = require("express");
+const session = require("express-session");
 const Database = require("better-sqlite3");
 
 const app = express();
@@ -25,6 +26,22 @@ db.exec(`
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+
+// 会话（用于真实登录态；Security Agent 可用凭证登录后带 cookie 测受保护页）
+app.use(
+  session({
+    secret: "acme-cloud-demo-secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: { httpOnly: true, sameSite: "lax" },
+  }),
+);
+
+// 要求登录的中间件：未登录跳转 /login
+function requireAuth(req, res, next) {
+  if (req.session && req.session.user) return next();
+  return res.redirect("/login");
+}
 
 // 注意：此处故意不设置任何安全响应头（CSP / X-Frame-Options / HSTS 等）
 // —— 漏洞 #5：缺失安全响应头基线
@@ -103,12 +120,45 @@ app.post("/login", (req, res) => {
   const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
   try {
     const row = db.prepare(sql).get();
-    if (row) return res.json({ ok: true, user: row });
+    if (row) {
+      // 登录成功：建立会话（真实登录态）
+      req.session.user = { id: row.id, name: row.name };
+      // 表单提交跳转到受保护页；API 调用返回 JSON
+      if ((req.headers.accept || "").includes("application/json")) {
+        return res.json({ ok: true, user: row });
+      }
+      return res.redirect("/dashboard");
+    }
     return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
     // 故意把 SQL 错误暴露给客户端 —— 便于注入探测（信息泄露）
     return res.status(500).json({ ok: false, error: e.message, sql });
   }
+});
+
+// 登出
+app.post("/logout", (req, res) => {
+  req.session.destroy(() => res.redirect("/"));
+});
+
+// ---- 受保护页：仅登录用户可访问 ----
+app.get("/dashboard", requireAuth, (req, res) => {
+  const u = req.session.user;
+  res.type("html")
+    .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
+    <title>控制台 · Acme Cloud</title>
+    <style>body{font-family:system-ui;max-width:760px;margin:40px auto;padding:0 20px;color:#1f2933}
+    .bar{display:flex;justify-content:space-between;align-items:center}
+    a{color:#0b5fff;text-decoration:none;margin-right:16px}
+    form{display:inline}</style></head>
+  <body>
+    <div class="bar">
+      <h2>欢迎回来，${u.name}</h2>
+      <form method="post" action="/logout"><button>退出</button></form>
+    </div>
+    <p>这是你的个人工作台。</p>
+    <nav><a href="/comments">社区留言板</a><a href="/search">搜索</a></nav>
+  </body></html>`);
 });
 
 // ---- 漏洞 #2：反射型 XSS（输入直接拼进 HTML） ----
@@ -132,18 +182,29 @@ app.get("/search", (req, res) => {
   </body></html>`);
 });
 
-// ---- 漏洞 #3：存储型 XSS（存储后原样渲染） ----
-app.post("/comment", (req, res) => {
+// ---- 漏洞 #3：存储型 XSS（存储后原样渲染）—— 现为登录后攻击面 ----
+app.post("/comment", requireAuth, (req, res) => {
   const body = req.body.body || "";
   db.prepare("INSERT INTO comments (body) VALUES (?)").run(body);
-  res.json({ ok: true });
+  res.redirect("/comments");
 });
 
-app.get("/comments", (_req, res) => {
+app.get("/comments", requireAuth, (_req, res) => {
   const rows = db.prepare("SELECT body FROM comments ORDER BY id DESC").all();
   const items = rows.map((r) => `<li>${r.body}</li>`).join("");
-  res.type("html").send(`<!doctype html><html><body>
-    <h2>留言板</h2><ul>${items}</ul>
+  res.type("html")
+    .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
+    <title>社区 · Acme Cloud</title>
+    <style>body{font-family:system-ui;max-width:680px;margin:40px auto;padding:0 20px;color:#1f2933}
+    textarea{width:100%;padding:10px;border:1px solid #cbd2d9;border-radius:6px}
+    button{margin-top:8px;padding:9px 18px;border:0;background:#0b5fff;color:#fff;border-radius:6px}</style></head>
+  <body>
+    <h2>社区留言板</h2>
+    <form method="post" action="/comment">
+      <textarea name="body" rows="3" placeholder="写点什么..."></textarea>
+      <button>发布</button>
+    </form>
+    <ul>${items}</ul>
   </body></html>`);
 });
 
