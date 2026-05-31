@@ -116,7 +116,14 @@ app.get("/login", (_req, res) => {
 // ---- 漏洞 #1：SQL 注入（字符串拼接） ----
 // 例: name = ' OR '1'='1  可绕过认证
 app.post("/login", (req, res) => {
-  const { name = "", password = "" } = req.body;
+  if (!req.body || typeof req.body !== "object") {
+    return res.status(400).json({ ok: false, error: "invalid request body" });
+  }
+  const name = typeof req.body.name === "string" ? req.body.name : "";
+  const password = typeof req.body.password === "string" ? req.body.password : "";
+  if (!name || !password) {
+    return res.status(400).json({ ok: false, error: "name and password are required" });
+  }
   const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
   try {
     const row = db.prepare(sql).get();
