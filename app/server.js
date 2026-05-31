@@ -9,6 +9,7 @@
 const express = require("express");
 const session = require("express-session");
 const Database = require("better-sqlite3");
+const morgan = require("morgan");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -23,6 +24,29 @@ db.exec(`
     (2, 'bob',   'bob-pass-456',   '222-22-2222'),
     (3, 'admin', 'sup3r-s3cret',   '999-99-9999');
 `);
+
+// ---- Audit logging utility ----
+function auditLog(event, details) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    event,
+    ...details,
+  };
+  process.stdout.write(JSON.stringify(entry) + "\n");
+}
+
+// ---- HTTP request logging (morgan) ----
+morgan.token("remote-ip", (req) => req.ip || req.connection.remoteAddress);
+app.use(morgan((tokens, req, res) => JSON.stringify({
+  timestamp: new Date().toISOString(),
+  event: "http_request",
+  method: tokens.method(req, res),
+  url: tokens.url(req, res),
+  status: tokens.status(req, res),
+  responseTime: tokens["response-time"](req, res) + "ms",
+  ip: tokens["remote-ip"](req, res),
+  userAgent: tokens["user-agent"](req, res),
+})));
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
@@ -118,26 +142,33 @@ app.get("/login", (_req, res) => {
 app.post("/login", (req, res) => {
   const { name = "", password = "" } = req.body;
   const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
+  const clientIp = req.ip || req.connection.remoteAddress;
   try {
     const row = db.prepare(sql).get();
     if (row) {
       // 登录成功：建立会话（真实登录态）
       req.session.user = { id: row.id, name: row.name };
+      auditLog("auth_success", { username: row.name, userId: row.id, ip: clientIp });
       // 表单提交跳转到受保护页；API 调用返回 JSON
       if ((req.headers.accept || "").includes("application/json")) {
         return res.json({ ok: true, user: row });
       }
       return res.redirect("/dashboard");
     }
+    auditLog("auth_failure", { usernameAttempted: name, ip: clientIp });
     return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
     // 故意把 SQL 错误暴露给客户端 —— 便于注入探测（信息泄露）
+    auditLog("auth_error", { usernameAttempted: name, ip: clientIp, error: e.message });
     return res.status(500).json({ ok: false, error: e.message, sql });
   }
 });
 
 // 登出
 app.post("/logout", (req, res) => {
+  const user = req.session && req.session.user;
+  const clientIp = req.ip || req.connection.remoteAddress;
+  auditLog("session_destroy", { username: user ? user.name : "unknown", userId: user ? user.id : null, ip: clientIp });
   req.session.destroy(() => res.redirect("/"));
 });
 
@@ -185,7 +216,10 @@ app.get("/search", (req, res) => {
 // ---- 漏洞 #3：存储型 XSS（存储后原样渲染）—— 现为登录后攻击面 ----
 app.post("/comment", requireAuth, (req, res) => {
   const body = req.body.body || "";
+  const user = req.session.user;
+  const clientIp = req.ip || req.connection.remoteAddress;
   db.prepare("INSERT INTO comments (body) VALUES (?)").run(body);
+  auditLog("comment_submitted", { username: user.name, userId: user.id, ip: clientIp, bodyLength: body.length });
   res.redirect("/comments");
 });
 
@@ -210,9 +244,12 @@ app.get("/comments", requireAuth, (_req, res) => {
 
 // ---- 漏洞 #4：IDOR（不校验身份，返回任意用户敏感数据） ----
 app.get("/api/user/:id", (req, res) => {
+  const clientIp = req.ip || req.connection.remoteAddress;
+  const sessionUser = req.session && req.session.user;
   const row = db
     .prepare("SELECT id, name, ssn FROM users WHERE id = ?")
     .get(req.params.id);
+  auditLog("sensitive_data_access", { endpoint: "/api/user/" + req.params.id, requestedUserId: req.params.id, sessionUser: sessionUser ? sessionUser.name : "unauthenticated", ip: clientIp, found: !!row });
   if (!row) return res.status(404).json({ error: "not found" });
   res.json(row); // 直接返回 ssn 等敏感字段，无任何授权检查
 });
