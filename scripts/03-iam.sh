@@ -20,6 +20,15 @@ state_set IAM_ROLE "$ROLE_NAME"
 aws_cli iam attach-role-policy --role-name "$ROLE_NAME" \
   --policy-arn "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" >/dev/null
 
+# Inline policy: allow EC2 to read application secrets from SSM Parameter Store
+SSM_PARAM_POLICY=$(cat <<POLICY
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ssm:GetParameter","ssm:GetParameters"],"Resource":"arn:aws:ssm:${AWS_REGION}:*:parameter/${PROJECT}/*"}]}
+POLICY
+)
+aws_cli iam put-role-policy --role-name "$ROLE_NAME" \
+  --policy-name "${PROJECT}-ssm-params-read" \
+  --policy-document "$SSM_PARAM_POLICY" >/dev/null
+
 # instance profile
 if ! aws_cli iam get-instance-profile --instance-profile-name "$PROFILE_NAME" >/dev/null 2>&1; then
   aws_cli iam create-instance-profile --instance-profile-name "$PROFILE_NAME" --tags "$TAG" >/dev/null

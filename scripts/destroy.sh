@@ -59,8 +59,15 @@ if [ -n "$PROFILE" ]; then
 fi
 if [ -n "$ROLE" ]; then
   aws_cli iam detach-role-policy --role-name "$ROLE" --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore 2>/dev/null || true
+  aws_cli iam delete-role-policy --role-name "$ROLE" --policy-name "${PROJECT}-ssm-params-read" 2>/dev/null || true
   aws_cli iam delete-role --role-name "$ROLE" 2>/dev/null && echo "  删除 IAM 角色" || true
 fi
+
+# SSM Parameter Store secrets cleanup
+aws_cli ssm delete-parameter --name "/${PROJECT}/session-secret" 2>/dev/null || true
+aws_cli ssm delete-parameter --name "/${PROJECT}/seed-passwords" 2>/dev/null || true
+aws_cli ssm delete-parameter --name "/${PROJECT}/seed-ssns" 2>/dev/null || true
+echo "  删除 SSM 参数"
 
 # 02 安全组（先删 EC2 SG 再删 ALB SG，因有引用关系）
 SG_EC2=$(g SG_EC2); SG_ALB=$(g SG_ALB)

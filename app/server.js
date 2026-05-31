@@ -13,16 +13,20 @@ const Database = require("better-sqlite3");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ---- 内存数据库与种子数据 ----
+// ---- Credentials from environment (not hardcoded in source) ----
+const SESSION_SECRET = process.env.SESSION_SECRET || "change-me-in-production";
+const SEED_PASSWORDS = (process.env.SEED_PASSWORDS || "pass1,pass2,pass3").split(",");
+const SEED_SSNS = (process.env.SEED_SSNS || "000-00-0000,000-00-0000,000-00-0000").split(",");
+
+// ---- 内存数据库与种子数据 (credentials injected via env) ----
 const db = new Database(":memory:");
-db.exec(`
-  CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT, ssn TEXT);
-  CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT);
-  INSERT INTO users (id, name, password, ssn) VALUES
-    (1, 'alice', 'alice-pass-123', '111-11-1111'),
-    (2, 'bob',   'bob-pass-456',   '222-22-2222'),
-    (3, 'admin', 'sup3r-s3cret',   '999-99-9999');
-`);
+db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT, ssn TEXT)");
+db.exec("CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)");
+
+const insertUser = db.prepare("INSERT INTO users (id, name, password, ssn) VALUES (?, ?, ?, ?)");
+insertUser.run(1, "alice", SEED_PASSWORDS[0], SEED_SSNS[0]);
+insertUser.run(2, "bob",   SEED_PASSWORDS[1], SEED_SSNS[1]);
+insertUser.run(3, "admin", SEED_PASSWORDS[2], SEED_SSNS[2]);
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
@@ -30,7 +34,7 @@ app.use(express.json());
 // 会话（用于真实登录态；Security Agent 可用凭证登录后带 cookie 测受保护页）
 app.use(
   session({
-    secret: "acme-cloud-demo-secret",
+    secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: { httpOnly: true, sameSite: "lax" },
