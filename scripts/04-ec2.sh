@@ -22,12 +22,14 @@ APP_B64=$(base64 < "$APP_FILE" | tr -d '\n')
 USER_DATA=$(cat <<EOF
 #!/bin/bash
 set -xe
+useradd -r -s /sbin/nologin nodeapp || true
 dnf install -y nodejs npm gcc-c++ make
 mkdir -p /opt/app
 echo "${APP_B64}" | base64 -d > /opt/app/server.js
 cd /opt/app
 npm init -y
 npm install express better-sqlite3
+chown -R nodeapp:nodeapp /opt/app
 cat > /etc/systemd/system/pentest-app.service <<'UNIT'
 [Unit]
 Description=Pentest Target App
@@ -37,7 +39,15 @@ Environment=PORT=${APP_PORT}
 WorkingDirectory=/opt/app
 ExecStart=/usr/bin/node /opt/app/server.js
 Restart=always
-User=root
+User=nodeapp
+Group=nodeapp
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/app
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -52,6 +62,7 @@ INSTANCE_ID=$(aws_cli ec2 run-instances \
   --subnet-id "$PRIV_A" --security-group-ids "$SG_EC2" \
   --iam-instance-profile "Name=${IAM_PROFILE}" \
   --no-associate-public-ip-address \
+  --metadata-options "HttpEndpoint=enabled,HttpTokens=required,HttpPutResponseHopLimit=1" \
   --user-data "$UD_B64" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Project,Value=${PROJECT}},{Key=Name,Value=${PROJECT}-app}]" \
   --query 'Instances[0].InstanceId' --output text)
