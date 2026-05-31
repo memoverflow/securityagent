@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 // =====================================================================
 //  ⚠️  授权 PENTEST 靶站 —— 故意包含安全漏洞
 //  仅用于 AWS Security Agent 渗透测试验证，部署在自有且已验证所有权的域名。
@@ -36,6 +37,28 @@ app.use(
     cookie: { httpOnly: true, sameSite: "lax" },
   }),
 );
+
+// ---- CSRF 保护 ----
+// 生成或获取会话中的 CSRF token
+function getCsrfToken(req) {
+  if (!req.session.csrfToken) {
+    req.session.csrfToken = crypto.randomBytes(32).toString("hex");
+  }
+  return req.session.csrfToken;
+}
+
+// 验证 CSRF token 的中间件
+function validateCsrf(req, res, next) {
+  const token = req.body._csrf || req.headers["x-csrf-token"] || "";
+  const sessionToken = req.session && req.session.csrfToken;
+  if (!sessionToken || !token || token !== sessionToken) {
+    return res.status(403).type("html").send(
+      `<!doctype html><html><head><meta charset="utf-8"><title>403</title></head>` +
+      `<body><h2>403 Forbidden</h2><p>Invalid or missing CSRF token.</p></body></html>`
+    );
+  }
+  return next();
+}
 
 // 要求登录的中间件：未登录跳转 /login
 function requireAuth(req, res, next) {
@@ -95,7 +118,8 @@ app.get("/", (_req, res) => {
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 // 登录页（普通表单，提交到 POST /login）
-app.get("/login", (_req, res) => {
+app.get("/login", (req, res) => {
+  const csrfToken = getCsrfToken(req);
   res.type("html")
     .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
     <title>登录 · Acme Cloud</title>
@@ -106,6 +130,7 @@ app.get("/login", (_req, res) => {
   <body>
     <h2>登录 Acme Cloud</h2>
     <form method="post" action="/login">
+      <input type="hidden" name="_csrf" value="${csrfToken}">
       <label>用户名</label><input name="name" autocomplete="username">
       <label>密码</label><input type="password" name="password" autocomplete="current-password">
       <button>登录</button>
@@ -115,7 +140,7 @@ app.get("/login", (_req, res) => {
 
 // ---- 漏洞 #1：SQL 注入（字符串拼接） ----
 // 例: name = ' OR '1'='1  可绕过认证
-app.post("/login", (req, res) => {
+app.post("/login", validateCsrf, (req, res) => {
   const { name = "", password = "" } = req.body;
   const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
   try {
@@ -137,13 +162,14 @@ app.post("/login", (req, res) => {
 });
 
 // 登出
-app.post("/logout", (req, res) => {
+app.post("/logout", validateCsrf, (req, res) => {
   req.session.destroy(() => res.redirect("/"));
 });
 
 // ---- 受保护页：仅登录用户可访问 ----
 app.get("/dashboard", requireAuth, (req, res) => {
   const u = req.session.user;
+  const csrfToken = getCsrfToken(req);
   res.type("html")
     .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
     <title>控制台 · Acme Cloud</title>
@@ -154,7 +180,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
   <body>
     <div class="bar">
       <h2>欢迎回来，${u.name}</h2>
-      <form method="post" action="/logout"><button>退出</button></form>
+      <form method="post" action="/logout"><input type="hidden" name="_csrf" value="${csrfToken}"><button>退出</button></form>
     </div>
     <p>这是你的个人工作台。</p>
     <nav><a href="/comments">社区留言板</a><a href="/search">搜索</a></nav>
@@ -183,14 +209,15 @@ app.get("/search", (req, res) => {
 });
 
 // ---- 漏洞 #3：存储型 XSS（存储后原样渲染）—— 现为登录后攻击面 ----
-app.post("/comment", requireAuth, (req, res) => {
+app.post("/comment", requireAuth, validateCsrf, (req, res) => {
   const body = req.body.body || "";
   db.prepare("INSERT INTO comments (body) VALUES (?)").run(body);
   res.redirect("/comments");
 });
 
-app.get("/comments", requireAuth, (_req, res) => {
+app.get("/comments", requireAuth, (req, res) => {
   const rows = db.prepare("SELECT body FROM comments ORDER BY id DESC").all();
+  const csrfToken = getCsrfToken(req);
   const items = rows.map((r) => `<li>${r.body}</li>`).join("");
   res.type("html")
     .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
@@ -201,6 +228,7 @@ app.get("/comments", requireAuth, (_req, res) => {
   <body>
     <h2>社区留言板</h2>
     <form method="post" action="/comment">
+      <input type="hidden" name="_csrf" value="${csrfToken}">
       <textarea name="body" rows="3" placeholder="写点什么..."></textarea>
       <button>发布</button>
     </form>
