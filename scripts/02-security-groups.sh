@@ -48,4 +48,4 @@ for sg in "$SG_ALB" "$SG_EC2"; do
     echo "  ✗ 安全违规：$sg inbound 含 0.0.0.0/0"; exit 1
   fi
 done
-echo "  ✓ security-groups done (ALB=$SG_ALB EC2=$SG_EC2，无 0.0.0.0/0)"
+echo "  ✓ security-groups done (ALB=${SG_ALB} EC2=${SG_EC2}, 无 0.0.0.0/0)"

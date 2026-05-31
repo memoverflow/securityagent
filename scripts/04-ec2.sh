@@ -59,4 +59,4 @@ state_set INSTANCE_ID "$INSTANCE_ID"
 
 echo "  等待实例 running ..."
 aws_cli ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-echo "  ✓ ec2 done (instance=$INSTANCE_ID，无公网IP，应用经 user-data 部署中)"
+echo "  ✓ ec2 done (instance=${INSTANCE_ID}, 无公网IP, 应用经 user-data 部署中)"
