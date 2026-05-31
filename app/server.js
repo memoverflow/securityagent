@@ -11,6 +11,7 @@ const session = require("express-session");
 const Database = require("better-sqlite3");
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3000;
 
 // ---- 内存数据库与种子数据 ----
@@ -33,7 +34,7 @@ app.use(
     secret: "acme-cloud-demo-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: "lax" },
+    cookie: { httpOnly: true, sameSite: "lax", secure: true },
   }),
 );
 

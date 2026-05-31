@@ -26,7 +26,7 @@ CONFIG=$(cat <<EOF
     "CustomOriginConfig": {
       "HTTPPort": ${ALB_LISTEN_PORT},
       "HTTPSPort": 443,
-      "OriginProtocolPolicy": "http-only",
+      "OriginProtocolPolicy": "https-only",
       "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]}
     }
   }]},
