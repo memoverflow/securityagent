@@ -14,6 +14,8 @@ CALLER_REF="${PROJECT}-$(date +%s)"
 CACHE_POLICY_ID="4135ea2d-6df8-44a3-9df3-4b5a84be39ad" # Managed-CachingDisabled
 # 转发所有 viewer 请求头/查询串/cookie 的 origin request policy: AllViewer
 ORIGIN_REQ_POLICY_ID="216adef6-5c7f-47e4-b989-5492eafa07d3" # Managed-AllViewer
+# AWS managed response headers policy: SecurityHeadersPolicy
+RESPONSE_HEADERS_POLICY_ID="67f7725c-6f97-4210-82d7-5512b31e9d03" # Managed-SecurityHeadersPolicy
 
 CONFIG=$(cat <<EOF
 {
@@ -35,6 +37,7 @@ CONFIG=$(cat <<EOF
     "ViewerProtocolPolicy": "redirect-to-https",
     "CachePolicyId": "${CACHE_POLICY_ID}",
     "OriginRequestPolicyId": "${ORIGIN_REQ_POLICY_ID}",
+    "ResponseHeadersPolicyId": "${RESPONSE_HEADERS_POLICY_ID}",
     "AllowedMethods": {"Quantity": 7,
       "Items": ["GET","HEAD","OPTIONS","PUT","POST","PATCH","DELETE"],
       "CachedMethods": {"Quantity": 2, "Items": ["GET","HEAD"]}}

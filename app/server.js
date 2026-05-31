@@ -33,7 +33,7 @@ app.use(
     secret: "acme-cloud-demo-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: "lax" },
+    cookie: { httpOnly: true, sameSite: "lax", secure: true },
   }),
 );
 
@@ -43,8 +43,17 @@ function requireAuth(req, res, next) {
   return res.redirect("/login");
 }
 
-// 注意：此处故意不设置任何安全响应头（CSP / X-Frame-Options / HSTS 等）
-// —— 漏洞 #5：缺失安全响应头基线
+// Security response headers middleware
+app.use((_req, res, next) => {
+  res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  next();
+});
 
 // ---- 首页：呈现为一个普通站点 ----
 app.get("/", (_req, res) => {
