@@ -22,17 +22,21 @@ APP_B64=$(base64 < "$APP_FILE" | tr -d '\n')
 USER_DATA=$(cat <<EOF
 #!/bin/bash
 set -xe
+SESSION_SECRET=\$(head -c 32 /dev/urandom | xxd -p | tr -d '\n')
 dnf install -y nodejs npm gcc-c++ make
 mkdir -p /opt/app
 echo "${APP_B64}" | base64 -d > /opt/app/server.js
 cd /opt/app
 npm init -y
 npm install express better-sqlite3
+echo "SESSION_SECRET=\${SESSION_SECRET}" > /opt/app/.env
+chmod 600 /opt/app/.env
 cat > /etc/systemd/system/pentest-app.service <<'UNIT'
 [Unit]
 Description=Pentest Target App
 After=network.target
 [Service]
+EnvironmentFile=/opt/app/.env
 Environment=PORT=${APP_PORT}
 WorkingDirectory=/opt/app
 ExecStart=/usr/bin/node /opt/app/server.js

@@ -8,10 +8,18 @@
 
 const express = require("express");
 const session = require("express-session");
+const crypto = require("crypto");
 const Database = require("better-sqlite3");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Session secret: must be provided via environment variable in production.
+// If not set, generate a random secret (sessions will not survive restarts).
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+if (!process.env.SESSION_SECRET) {
+  console.warn("WARNING: SESSION_SECRET not set. Using random secret; sessions will not persist across restarts.");
+}
 
 // ---- 内存数据库与种子数据 ----
 const db = new Database(":memory:");
@@ -30,7 +38,7 @@ app.use(express.json());
 // 会话（用于真实登录态；Security Agent 可用凭证登录后带 cookie 测受保护页）
 app.use(
   session({
-    secret: "acme-cloud-demo-secret",
+    secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: { httpOnly: true, sameSite: "lax" },
