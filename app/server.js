@@ -11,6 +11,17 @@ const session = require("express-session");
 const Database = require("better-sqlite3");
 
 const app = express();
+
+// HTML entity escaping to prevent XSS
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const PORT = process.env.PORT || 3000;
 
 // ---- 内存数据库与种子数据 ----
@@ -164,8 +175,9 @@ app.get("/dashboard", requireAuth, (req, res) => {
 // ---- 漏洞 #2：反射型 XSS（输入直接拼进 HTML） ----
 app.get("/search", (req, res) => {
   const q = req.query.q || "";
+  const safeQ = escapeHtml(q);
   const result = q
-    ? `<p>你搜索了: ${q}</p><p style="color:#616e7c">没有找到匹配的结果。</p>`
+    ? `<p>你搜索了: ${safeQ}</p><p style="color:#616e7c">没有找到匹配的结果。</p>`
     : `<p style="color:#616e7c">输入关键词以搜索文档与项目。</p>`;
   res.type("html")
     .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
@@ -176,7 +188,7 @@ app.get("/search", (req, res) => {
   <body>
     <h2>搜索</h2>
     <form method="get" action="/search">
-      <input name="q" placeholder="搜索..." value="${q}"><button>搜索</button>
+      <input name="q" placeholder="搜索..." value="${safeQ}"><button>搜索</button>
     </form>
     ${result}
   </body></html>`);
