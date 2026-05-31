@@ -11,6 +11,16 @@ const session = require("express-session");
 const Database = require("better-sqlite3");
 
 const app = express();
+
+// HTML entity encoding to prevent XSS when rendering user content
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 const PORT = process.env.PORT || 3000;
 
 // ---- 内存数据库与种子数据 ----
@@ -191,7 +201,7 @@ app.post("/comment", requireAuth, (req, res) => {
 
 app.get("/comments", requireAuth, (_req, res) => {
   const rows = db.prepare("SELECT body FROM comments ORDER BY id DESC").all();
-  const items = rows.map((r) => `<li>${r.body}</li>`).join("");
+  const items = rows.map((r) => `<li>${escapeHtml(r.body)}</li>`).join("");
   res.type("html")
     .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
     <title>社区 · Acme Cloud</title>
