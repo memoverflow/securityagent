@@ -33,7 +33,7 @@ app.use(
     secret: "acme-cloud-demo-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: "lax" },
+    cookie: { httpOnly: true, sameSite: "lax", secure: true },
   }),
 );
 
@@ -121,13 +121,24 @@ app.post("/login", (req, res) => {
   try {
     const row = db.prepare(sql).get();
     if (row) {
-      // 登录成功：建立会话（真实登录态）
-      req.session.user = { id: row.id, name: row.name };
-      // 表单提交跳转到受保护页；API 调用返回 JSON
-      if ((req.headers.accept || "").includes("application/json")) {
-        return res.json({ ok: true, user: row });
-      }
-      return res.redirect("/dashboard");
+      // 登录成功：重新生成会话 ID 防止会话固定攻击（CWE-384）
+      req.session.regenerate((err) => {
+        if (err) {
+          return res.status(500).json({ ok: false, error: "session error" });
+        }
+        req.session.user = { id: row.id, name: row.name };
+        req.session.save((err) => {
+          if (err) {
+            return res.status(500).json({ ok: false, error: "session error" });
+          }
+          // 表单提交跳转到受保护页；API 调用返回 JSON
+          if ((req.headers.accept || "").includes("application/json")) {
+            return res.json({ ok: true, user: row });
+          }
+          return res.redirect("/dashboard");
+        });
+      });
+      return;
     }
     return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
