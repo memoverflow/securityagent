@@ -11,6 +11,16 @@ const session = require("express-session");
 const Database = require("better-sqlite3");
 
 const app = express();
+
+// HTML encoding helper to prevent XSS
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
 const PORT = process.env.PORT || 3000;
 
 // ---- 内存数据库与种子数据 ----
@@ -114,14 +124,14 @@ app.get("/login", (_req, res) => {
 });
 
 // ---- 漏洞 #1：SQL 注入（字符串拼接） ----
-// 例: name = ' OR '1'='1  可绕过认证
+// Fixed: use parameterized query to prevent SQL injection
 app.post("/login", (req, res) => {
   const { name = "", password = "" } = req.body;
-  const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
+  const stmt = db.prepare("SELECT id, name FROM users WHERE name = ? AND password = ?");
   try {
-    const row = db.prepare(sql).get();
+    const row = stmt.get(name, password);
     if (row) {
-      // 登录成功：建立会话（真实登录态）
+      // 登录成功：建立会话
       req.session.user = { id: row.id, name: row.name };
       // 表单提交跳转到受保护页；API 调用返回 JSON
       if ((req.headers.accept || "").includes("application/json")) {
@@ -131,8 +141,8 @@ app.post("/login", (req, res) => {
     }
     return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
-    // 故意把 SQL 错误暴露给客户端 —— 便于注入探测（信息泄露）
-    return res.status(500).json({ ok: false, error: e.message, sql });
+    // Do not expose SQL details to client
+    return res.status(500).json({ ok: false, error: "internal server error" });
   }
 });
 
@@ -144,7 +154,8 @@ app.post("/logout", (req, res) => {
 // ---- 受保护页：仅登录用户可访问 ----
 app.get("/dashboard", requireAuth, (req, res) => {
   const u = req.session.user;
-  res.type("html")
+  const safeName = escapeHtml(u.name);
+  res.set("Content-Security-Policy", "default-src 'self'").type("html")
     .send(`<!doctype html><html lang="zh"><head><meta charset="utf-8">
     <title>控制台 · Acme Cloud</title>
     <style>body{font-family:system-ui;max-width:760px;margin:40px auto;padding:0 20px;color:#1f2933}
@@ -153,7 +164,7 @@ app.get("/dashboard", requireAuth, (req, res) => {
     form{display:inline}</style></head>
   <body>
     <div class="bar">
-      <h2>欢迎回来，${u.name}</h2>
+      <h2>欢迎回来，${safeName}</h2>
       <form method="post" action="/logout"><button>退出</button></form>
     </div>
     <p>这是你的个人工作台。</p>
