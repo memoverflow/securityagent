@@ -209,12 +209,16 @@ app.get("/comments", requireAuth, (_req, res) => {
 });
 
 // ---- 漏洞 #4：IDOR（不校验身份，返回任意用户敏感数据） ----
-app.get("/api/user/:id", (req, res) => {
+app.get("/api/user/:id", requireAuth, (req, res) => {
+  const requestedId = Number(req.params.id);
+  if (req.session.user.id !== requestedId) {
+    return res.status(403).json({ error: "forbidden" });
+  }
   const row = db
-    .prepare("SELECT id, name, ssn FROM users WHERE id = ?")
-    .get(req.params.id);
+    .prepare("SELECT id, name FROM users WHERE id = ?")
+    .get(requestedId);
   if (!row) return res.status(404).json({ error: "not found" });
-  res.json(row); // 直接返回 ssn 等敏感字段，无任何授权检查
+  res.json(row);
 });
 
 app.listen(PORT, "0.0.0.0", () => {
