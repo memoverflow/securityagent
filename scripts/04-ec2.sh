@@ -51,6 +51,7 @@ INSTANCE_ID=$(aws_cli ec2 run-instances \
   --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" \
   --subnet-id "$PRIV_A" --security-group-ids "$SG_EC2" \
   --iam-instance-profile "Name=${IAM_PROFILE}" \
+  --metadata-options "HttpTokens=required,HttpEndpoint=enabled,HttpPutResponseHopLimit=1" \
   --no-associate-public-ip-address \
   --user-data "$UD_B64" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Project,Value=${PROJECT}},{Key=Name,Value=${PROJECT}-app}]" \
