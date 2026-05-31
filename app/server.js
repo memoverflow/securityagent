@@ -11,6 +11,9 @@ const session = require("express-session");
 const Database = require("better-sqlite3");
 
 const app = express();
+// Trust the first proxy hop (ALB) so Express honors X-Forwarded-* headers
+// Required for correct req.ip, req.protocol behind CloudFront → ALB chain
+app.set("trust proxy", 1);
 const PORT = process.env.PORT || 3000;
 
 // ---- 内存数据库与种子数据 ----
@@ -33,7 +36,7 @@ app.use(
     secret: "acme-cloud-demo-secret",
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: "lax" },
+    cookie: { httpOnly: true, sameSite: "lax", secure: true },
   }),
 );
 
