@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 // =====================================================================
 //  ⚠️  授权 PENTEST 靶站 —— 故意包含安全漏洞
 //  仅用于 AWS Security Agent 渗透测试验证，部署在自有且已验证所有权的域名。
@@ -13,24 +14,45 @@ const Database = require("better-sqlite3");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ---- 内存数据库与种子数据 ----
+// ---- 密码哈希工具函数 (使用 Node.js 内置 scrypt KDF) ----
+const SCRYPT_KEYLEN = 64;
+const SCRYPT_SALT_LEN = 16;
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(SCRYPT_SALT_LEN).toString("hex");
+  const hash = crypto.scryptSync(password, salt, SCRYPT_KEYLEN).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = stored.split(":");
+  const derived = crypto.scryptSync(password, salt, SCRYPT_KEYLEN).toString("hex");
+  return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(derived, "hex"));
+}
+
+// ---- 内存数据库与种子数据 (密码使用 scrypt 哈希存储) ----
 const db = new Database(":memory:");
 db.exec(`
   CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT, ssn TEXT);
   CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT);
-  INSERT INTO users (id, name, password, ssn) VALUES
-    (1, 'alice', 'alice-pass-123', '111-11-1111'),
-    (2, 'bob',   'bob-pass-456',   '222-22-2222'),
-    (3, 'admin', 'sup3r-s3cret',   '999-99-9999');
 `);
+const seedUsers = [
+  { id: 1, name: "alice", password: "alice-pass-123", ssn: "111-11-1111" },
+  { id: 2, name: "bob",   password: "bob-pass-456",   ssn: "222-22-2222" },
+  { id: 3, name: "admin", password: "sup3r-s3cret",   ssn: "999-99-9999" },
+];
+const insertUser = db.prepare("INSERT INTO users (id, name, password, ssn) VALUES (?, ?, ?, ?)");
+for (const u of seedUsers) {
+  insertUser.run(u.id, u.name, hashPassword(u.password), u.ssn);
+}
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// 会话（用于真实登录态；Security Agent 可用凭证登录后带 cookie 测受保护页）
+// 会话（使用加密随机生成的 secret）
 app.use(
   session({
-    secret: "acme-cloud-demo-secret",
+    secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex"),
     resave: false,
     saveUninitialized: false,
     cookie: { httpOnly: true, sameSite: "lax" },
@@ -113,26 +135,23 @@ app.get("/login", (_req, res) => {
   </body></html>`);
 });
 
-// ---- 漏洞 #1：SQL 注入（字符串拼接） ----
-// 例: name = ' OR '1'='1  可绕过认证
+// ---- 登录处理 ----
 app.post("/login", (req, res) => {
   const { name = "", password = "" } = req.body;
-  const sql = `SELECT id, name FROM users WHERE name = '${name}' AND password = '${password}'`;
   try {
-    const row = db.prepare(sql).get();
-    if (row) {
-      // 登录成功：建立会话（真实登录态）
+    const row = db.prepare("SELECT id, name, password FROM users WHERE name = ?").get(name);
+    if (row && verifyPassword(password, row.password)) {
+      // 登录成功：建立会话
       req.session.user = { id: row.id, name: row.name };
       // 表单提交跳转到受保护页；API 调用返回 JSON
       if ((req.headers.accept || "").includes("application/json")) {
-        return res.json({ ok: true, user: row });
+        return res.json({ ok: true, user: { id: row.id, name: row.name } });
       }
       return res.redirect("/dashboard");
     }
     return res.status(401).json({ ok: false, error: "invalid credentials" });
   } catch (e) {
-    // 故意把 SQL 错误暴露给客户端 —— 便于注入探测（信息泄露）
-    return res.status(500).json({ ok: false, error: e.message, sql });
+    return res.status(500).json({ ok: false, error: "internal error" });
   }
 });
 
