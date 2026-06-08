@@ -25,9 +25,13 @@ set -xe
 dnf install -y nodejs npm gcc-c++ make
 mkdir -p /opt/app
 echo "${APP_B64}" | base64 -d > /opt/app/server.js
+# 为路径遍历漏洞 (#7) 准备可读文件目录与示例文件
+mkdir -p /opt/app/files
+echo "Acme Cloud 文件服务 readme" > /opt/app/files/readme.txt
+echo "ACME{path_traversal_secret_flag}" > /opt/app/files/secret.txt
 cd /opt/app
 npm init -y
-npm install express better-sqlite3
+npm install express express-session better-sqlite3
 cat > /etc/systemd/system/pentest-app.service <<'UNIT'
 [Unit]
 Description=Pentest Target App

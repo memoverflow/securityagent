@@ -9,6 +9,11 @@
 const express = require("express");
 const session = require("express-session");
 const Database = require("better-sqlite3");
+const { execSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const http = require("http");
+const https = require("https");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,13 +21,16 @@ const PORT = process.env.PORT || 3000;
 // ---- 内存数据库与种子数据 ----
 const db = new Database(":memory:");
 db.exec(`
-  CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT, ssn TEXT);
+  CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, password TEXT, ssn TEXT, role TEXT);
   CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT);
-  INSERT INTO users (id, name, password, ssn) VALUES
-    (1, 'alice', 'alice-pass-123', '111-11-1111'),
-    (2, 'bob',   'bob-pass-456',   '222-22-2222'),
-    (3, 'admin', 'sup3r-s3cret',   '999-99-9999');
+  INSERT INTO users (id, name, password, ssn, role) VALUES
+    (1, 'alice', 'alice-pass-123', '111-11-1111', 'user'),
+    (2, 'bob',   'bob-pass-456',   '222-22-2222', 'user'),
+    (3, 'admin', 'sup3r-s3cret',   '999-99-9999', 'admin');
 `);
+
+// ---- 漏洞 #12：硬编码密钥（源码泄露即泄露密钥） ----
+const API_SIGNING_KEY = "acme-cloud-static-hmac-key-2026";
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
@@ -215,6 +223,122 @@ app.get("/api/user/:id", (req, res) => {
     .get(req.params.id);
   if (!row) return res.status(404).json({ error: "not found" });
   res.json(row); // 直接返回 ssn 等敏感字段，无任何授权检查
+});
+
+// =====================================================================
+//  移动端 / API 攻击面 —— 供 Acme Cloud Android App (APK) 调用
+//  这些接口构成移动靶站的服务端，包含多个故意漏洞。
+// =====================================================================
+
+// ---- 漏洞 #10：弱会话 token（可预测 / 可伪造） ----
+// 移动端登录成功后返回 token = base64("uid:" + id)，无签名、无随机性。
+// 攻击者可枚举 id 伪造任意用户 token（含 admin）。
+function makeToken(id) {
+  return Buffer.from("uid:" + id).toString("base64");
+}
+function parseToken(token) {
+  try {
+    const s = Buffer.from(String(token || ""), "base64").toString("utf8");
+    const m = s.match(/^uid:(\d+)$/);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+// 移动端登录（同样是 SQL 注入点 —— 漏洞 #1 在 API 上的体现）
+app.post("/api/login", (req, res) => {
+  const { name = "", password = "" } = req.body;
+  const sql = `SELECT id, name, role FROM users WHERE name = '${name}' AND password = '${password}'`;
+  try {
+    const row = db.prepare(sql).get();
+    if (!row) return res.status(401).json({ ok: false, error: "invalid credentials" });
+    return res.json({ ok: true, token: makeToken(row.id), user: row });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message, sql });
+  }
+});
+
+// 当前用户信息：用可伪造 token 鉴权 —— 漏洞 #10 的利用点
+app.get("/api/me", (req, res) => {
+  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const uid = parseToken(token);
+  if (!uid) return res.status(401).json({ error: "missing/invalid token" });
+  const row = db.prepare("SELECT id, name, ssn, role FROM users WHERE id = ?").get(uid);
+  if (!row) return res.status(404).json({ error: "not found" });
+  res.json(row); // 任意 uid 即可拿到对应用户全部字段（含 ssn）
+});
+
+// ---- 漏洞 #9：垂直越权（缺角色校验的 admin 接口） ----
+// 任何持有任意有效 token 的人都能列出所有用户（含明文密码）。
+app.get("/api/admin/users", (req, res) => {
+  const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  const uid = parseToken(token);
+  if (!uid) return res.status(401).json({ error: "missing/invalid token" });
+  // 故意不校验 role 是否为 admin
+  const rows = db.prepare("SELECT id, name, password, ssn, role FROM users").all();
+  res.json({ users: rows });
+});
+
+// ---- 漏洞 #6：命令注入（用户输入直接进 shell） ----
+// 例: host = 127.0.0.1; cat /etc/passwd
+app.get("/api/ping", (req, res) => {
+  const host = req.query.host || "127.0.0.1";
+  try {
+    const out = execSync(`ping -c 1 ${host}`, { timeout: 5000 }).toString();
+    res.type("text").send(out);
+  } catch (e) {
+    res.status(500).type("text").send(String(e.stdout || e.message));
+  }
+});
+
+// ---- 漏洞 #7：路径遍历（任意文件读取） ----
+// 例: name = ../../../../etc/passwd
+app.get("/api/file", (req, res) => {
+  const name = req.query.name || "readme.txt";
+  const full = path.join("/opt/app/files", name);
+  try {
+    const data = fs.readFileSync(full, "utf8"); // 不做 path 规范化校验
+    res.type("text").send(data);
+  } catch (e) {
+    res.status(404).type("text").send("not found: " + full);
+  }
+});
+
+// ---- 漏洞 #8：SSRF（服务端请求任意 URL） ----
+// 例: url = http://169.254.169.254/latest/meta-data/iam/security-credentials/
+app.get("/api/fetch", (req, res) => {
+  const target = req.query.url || "";
+  if (!target) return res.status(400).json({ error: "url required" });
+  const lib = target.startsWith("https") ? https : http;
+  try {
+    lib
+      .get(target, (r) => {
+        let buf = "";
+        r.on("data", (c) => (buf += c));
+        r.on("end", () => res.type("text").send(buf));
+      })
+      .on("error", (e) => res.status(502).json({ error: e.message }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---- 漏洞 #11：调试接口信息泄露（暴露环境变量 / 主机信息） ----
+app.get("/api/debug", (_req, res) => {
+  res.json({
+    env: process.env, // 直接吐出全部环境变量
+    cwd: process.cwd(),
+    versions: process.versions,
+    signingKey: API_SIGNING_KEY, // 连硬编码密钥也一起泄露
+  });
+});
+
+// ---- 漏洞 #13：开放重定向 ----
+// 例: /go?to=https://evil.example.com
+app.get("/go", (req, res) => {
+  const to = req.query.to || "/";
+  res.redirect(to); // 不校验目标，任意跳转
 });
 
 app.listen(PORT, "0.0.0.0", () => {
