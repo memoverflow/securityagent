@@ -1,5 +1,15 @@
 node_modules/
 scripts/.state
+scripts/.state.bak
 *.log
 .DS_Store
 *.pdf
+
+# Build artifacts
+*.apk
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

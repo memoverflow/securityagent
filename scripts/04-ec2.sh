@@ -16,15 +16,16 @@ AMI_ID=$(aws_cli ssm get-parameters \
   --query 'Parameters[0].Value' --output text)
 state_set AMI_ID "$AMI_ID"
 
-# 将 server.js base64 嵌入 user-data，避免引号转义问题
-APP_B64=$(base64 < "$APP_FILE" | tr -d '\n')
+# server.js 从 GitHub raw 下载（避免 user-data 25600 字节上限）
+# EC2 在私有子网，经 NAT 出网可访问 GitHub
+APP_RAW_URL="${APP_RAW_URL:-https://raw.githubusercontent.com/memoverflow/securityagent/main/app/server.js}"
 
 USER_DATA=$(cat <<EOF
 #!/bin/bash
 set -xe
 dnf install -y nodejs npm gcc-c++ make
 mkdir -p /opt/app
-echo "${APP_B64}" | base64 -d > /opt/app/server.js
+curl -fsSL "${APP_RAW_URL}" -o /opt/app/server.js
 # 为路径遍历漏洞 (#7) 准备可读文件目录与示例文件
 mkdir -p /opt/app/files
 echo "Acme Cloud 文件服务 readme" > /opt/app/files/readme.txt
